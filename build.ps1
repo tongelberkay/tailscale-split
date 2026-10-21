@@ -1,5 +1,5 @@
 # Builds dist\tailsplit.exe (one file) and fetches wintun.dll beside it for TUN mode.
-# Needs Go 1.25+ (https://go.dev/dl/). Nothing is installed system-wide.
+# Needs Go 1.27.3+ (https://go.dev/dl/; an older Go fetches it by itself). Nothing is installed system-wide.
 $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
 
