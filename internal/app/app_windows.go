@@ -1,5 +1,5 @@
-// Package app ties the tailnet node, the TUN and the engine together and
-// exposes start/stop to the UI.
+// Package app ties the tailnet node and the proxy together and exposes
+// start/stop to the UI.
 package app
 
 import (
@@ -14,12 +14,10 @@ import (
 	"time"
 
 	"tailsplit/internal/config"
-	"tailsplit/internal/engine"
 	"tailsplit/internal/policy"
 	"tailsplit/internal/proc"
 	"tailsplit/internal/proxy"
 	"tailsplit/internal/tailnet"
-	"tailsplit/internal/winnet"
 )
 
 type State int
@@ -36,13 +34,13 @@ func (s State) String() string {
 
 // Snapshot is what the UI renders.
 type Snapshot struct {
-	State        State
-	Tailnet      tailnet.Status
-	Settings     config.Settings
-	Err          string
-	FlowsTailnet int64 // flows sent through the tailnet since start
-	FlowsDirect  int64 // TUN mode: flows sent direct; proxy mode: refused clients
-	ProxyAddr    string
+	State     State
+	Tailnet   tailnet.Status
+	Settings  config.Settings
+	Err       string
+	Served    int64 // proxy connections sent through the exit node since start
+	Refused   int64 // proxy connections from processes that are not selected
+	ProxyAddr string
 }
 
 type App struct {
@@ -59,9 +57,7 @@ type App struct {
 	state    State
 	err      string
 	settings config.Settings
-	eng      *engine.Engine
-	tun      *winnet.Tun
-	ln       net.Listener // proxy mode
+	ln       net.Listener
 
 	pol                    atomic.Pointer[policy.Policy]
 	proxyServed, proxyDeny atomic.Int64
@@ -96,7 +92,7 @@ func New(dir string, logf func(string, ...any)) (*App, error) {
 	return a, nil
 }
 
-// StartNode brings the tailnet node up (no TUN, no routes). Signing in only
+// StartNode brings the tailnet node up without the proxy. Signing in only
 // needs this.
 func (a *App) StartNode() error {
 	if err := a.node.Start(a.ctx); err != nil {
@@ -127,13 +123,9 @@ func (a *App) Snapshot() Snapshot {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	s := Snapshot{State: a.state, Tailnet: a.node.Status(), Settings: a.settings, Err: a.err}
-	if a.eng != nil {
-		s.FlowsTailnet = a.eng.FlowsTailnet.Load()
-		s.FlowsDirect = a.eng.FlowsDirect.Load()
-	}
 	if a.ln != nil {
-		s.FlowsTailnet = a.proxyServed.Load()
-		s.FlowsDirect = a.proxyDeny.Load()
+		s.Served = a.proxyServed.Load()
+		s.Refused = a.proxyDeny.Load()
 		s.ProxyAddr = a.ln.Addr().String()
 	}
 	return s
@@ -193,38 +185,7 @@ func (a *App) start(s config.Settings) error {
 		return err
 	}
 	a.pol.Store(policy.New(s.Apps))
-	if s.Mode == config.ModeProxy {
-		return a.startProxy(s)
-	}
-	v6 := winnet.NativeIPv6()
-	tun, err := winnet.Open(v6)
-	if err != nil {
-		return err
-	}
-	eng, err := engine.New(engine.Config{
-		Device:  tun,
-		MTU:     winnet.MTU,
-		Tailnet: a.node.Dial,
-		Direct:  winnet.DirectDial,
-		Lookup:  proc.Lookup,
-		Logf:    a.Logf,
-	}, policy.New(s.Apps))
-	if err != nil {
-		tun.Close()
-		return err
-	}
-	a.mu.Lock()
-	a.tun, a.eng = tun, eng
-	a.mu.Unlock()
-	go func() {
-		if err := eng.Run(); err != nil {
-			a.Logf("engine stopped: %v", err)
-			a.Stop()
-			a.setState(Stopped, err)
-		}
-	}()
-	a.Logf("routing %d app(s) via %s (IPv6 routed: %v)", len(s.Apps), exit, v6)
-	return nil
+	return a.startProxy(s)
 }
 
 // startProxy listens on loopback only. Each client connection is checked
@@ -264,16 +225,13 @@ func (a *App) ProxyURL() string {
 	return "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(a.settings.ProxyPort))
 }
 
-// Stop removes the TUN and its routes. The tailnet node stays signed in.
+// Stop closes the proxy. The tailnet node stays signed in.
 func (a *App) Stop() {
 	a.mu.Lock()
-	eng, ln := a.eng, a.ln
-	a.eng, a.tun, a.ln = nil, nil, nil
+	ln := a.ln
+	a.ln = nil
 	was := a.state
 	a.mu.Unlock()
-	if eng != nil {
-		eng.Close() // also closes the TUN
-	}
 	if ln != nil {
 		ln.Close() // open tunnels finish on their own
 	}
@@ -334,13 +292,9 @@ func (a *App) apply(s config.Settings) error {
 	a.mu.Lock()
 	exitChanged := s.ExitNode != a.settings.ExitNode
 	a.settings = s
-	eng := a.eng
 	running := a.state == Routing
 	a.mu.Unlock()
 	a.pol.Store(policy.New(s.Apps))
-	if eng != nil {
-		eng.SetPolicy(policy.New(s.Apps))
-	}
 	if running {
 		if exitChanged {
 			if err := a.node.SetExitNode(a.ctx, s.ExitNode); err != nil {

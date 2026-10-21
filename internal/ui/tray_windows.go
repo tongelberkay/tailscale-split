@@ -300,12 +300,8 @@ func (t *tray) render() {
 		t.status.SetTitle("Routing, but the exit node is offline")
 		t.signIn.Hide()
 		systray.SetIcon(iconBroken)
-	case s.State == app.Routing && s.ProxyAddr != "":
-		t.status.SetTitle(fmt.Sprintf("Proxy on %s: %d connections via exit node, %d refused", s.ProxyAddr, s.FlowsTailnet, s.FlowsDirect))
-		t.signIn.Hide()
-		systray.SetIcon(iconOn)
 	case s.State == app.Routing:
-		t.status.SetTitle(fmt.Sprintf("Routing: %d flows via exit node, %d direct", s.FlowsTailnet, s.FlowsDirect))
+		t.status.SetTitle(fmt.Sprintf("Proxy on %s: %d connections via exit node, %d refused", s.ProxyAddr, s.Served, s.Refused))
 		t.signIn.Hide()
 		systray.SetIcon(iconOn)
 	default:
@@ -371,18 +367,12 @@ func (t *tray) render() {
 	}
 	systray.SetTooltip("TailSplit: " + s.State.String())
 
-	proxyMode := s.Settings.Mode == config.ModeProxy
 	labels := Labels(s.Settings.Apps)
 	for i, it := range t.appItems {
 		if i < len(s.Settings.Apps) {
 			it.top.SetTitle(labels[i])
 			it.top.SetTooltip(s.Settings.Apps[i])
 			it.top.Show()
-			if proxyMode {
-				it.launch.Show()
-			} else {
-				it.launch.Hide()
-			}
 		} else {
 			it.top.Hide()
 		}

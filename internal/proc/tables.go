@@ -1,5 +1,5 @@
-// Package proc finds which process owns a TCP or UDP socket, so that a flow
-// arriving on the TUN can be matched to an executable path.
+// Package proc finds which process owns a TCP or UDP socket, so that a
+// connection to the proxy can be matched to an executable path.
 package proc
 
 import (

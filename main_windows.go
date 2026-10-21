@@ -34,9 +34,6 @@ Usage:
   tailsplit run                route in this console until Ctrl+C
   tailsplit launch <app>       start a listed app (name or path) through the proxy;
                                the tray app must be running (good for shortcuts)
-  tailsplit mode proxy|tun     proxy (default): only listed apps launched through
-                               TailSplit use the exit node; tun: virtual adapter
-                               for all traffic (needs administrator rights)
   tailsplit exit-nodes         list the exit nodes you can use (signs in if needed)
   tailsplit exit-node <name>   set the exit node (Tailscale IP, host or MagicDNS name)
   tailsplit add <app.exe>...   send these executables through the exit node
@@ -132,15 +129,6 @@ func run(args []string) error {
 			}
 			s.Apps = kept
 		})
-	case "mode":
-		if len(args) != 1 {
-			return fmt.Errorf("usage: tailsplit mode proxy|tun")
-		}
-		m := strings.ToLower(args[0])
-		if m != config.ModeProxy && m != config.ModeTUN {
-			return fmt.Errorf("mode must be proxy or tun")
-		}
-		return edit(dir, func(s *config.Settings) { s.Mode = m })
 	case "launch":
 		if len(args) < 1 {
 			return fmt.Errorf("usage: tailsplit launch <app name or path>")
@@ -161,7 +149,7 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("mode: %s (proxy port %d)\nexit node: %s\napps:\n", s.Mode, s.ProxyPort, or(s.ExitNode, "(not set)"))
+		fmt.Printf("proxy port: %d\nexit node: %s\napps:\n", s.ProxyPort, or(s.ExitNode, "(not set)"))
 		for _, a := range s.Apps {
 			fmt.Println("  " + a)
 		}
@@ -196,16 +184,7 @@ func or(a, b string) string {
 	return a
 }
 
-func prepare(dir string, echo, forceProxy bool) (*app.App, *logfile.Log, func(), error) {
-	s, err := config.Load(dir)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	// Only the adapter needs administrator rights. In proxy mode, staying
-	// unelevated also means launched apps don't run as administrator.
-	if s.Mode == config.ModeTUN && !forceProxy && !ui.IsElevated() {
-		return nil, nil, nil, errNeedsAdmin
-	}
+func prepare(dir string, echo bool) (*app.App, *logfile.Log, func(), error) {
 	ok, release := ui.SingleInstance()
 	if !ok {
 		return nil, nil, nil, fmt.Errorf("TailSplit is already running (check the tray)")
@@ -233,13 +212,8 @@ func prepare(dir string, echo, forceProxy bool) (*app.App, *logfile.Log, func(),
 	return a, log, func() { log.Close(); release() }, nil
 }
 
-var errNeedsAdmin = fmt.Errorf("tun mode needs administrator rights to create the network adapter")
-
 func tray(dir string) error {
-	a, log, done, err := prepare(dir, false, false)
-	if err == errNeedsAdmin {
-		return ui.RelaunchElevated(nil)
-	}
+	a, log, done, err := prepare(dir, false)
 	if err != nil {
 		return err
 	}
@@ -307,14 +281,13 @@ func runApp(dir string, args oneshot.Args) error {
 		return fmt.Errorf("%s is already running without the proxy; quit it completely first", filepath.Base(exe))
 	}
 
-	a, _, done, err := prepare(dir, true, true)
+	a, _, done, err := prepare(dir, true)
 	if err != nil {
 		return err
 	}
 	defer done()
 	defer a.Close()
 	err = a.Override(func(s *config.Settings) {
-		s.Mode = config.ModeProxy
 		s.Apps = []string{exe} // only this app (and its children) may use the proxy
 		if args.ExitNode != "" {
 			s.ExitNode = args.ExitNode
@@ -365,7 +338,7 @@ func listExitNodes(dir string) error {
 	} else {
 		release()
 	}
-	a, _, done, err := prepare(dir, true, true)
+	a, _, done, err := prepare(dir, true)
 	if err != nil {
 		return err
 	}
@@ -416,7 +389,7 @@ func listExitNodes(dir string) error {
 }
 
 func console(dir string) error {
-	a, _, done, err := prepare(dir, true, false)
+	a, _, done, err := prepare(dir, true)
 	if err != nil {
 		return err
 	}

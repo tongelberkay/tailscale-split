@@ -1,0 +1,59 @@
+# Tests, then builds tailsplit.exe for amd64 and arm64 and uploads each as a
+# workflow artifact named tailsplit-<arch>. Called by ci.yml and release.yml.
+name: Build
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit or tag to build
+        type: string
+        default: ''
+      version:
+        description: Version stamped into the binary
+        type: string
+        required: true
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test ./...
+
+  build:
+    needs: test
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build
+        shell: pwsh
+        env:
+          CGO_ENABLED: '0'
+          GOOS: windows
+          GOARCH: ${{ matrix.arch }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          $tags = (Get-Content .github\build-tags.txt -Raw).Trim()
+          go build -trimpath -tags $tags -ldflags "-s -w -H windowsgui -X main.version=$env:VERSION" -o dist\tailsplit.exe .
+          if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
+          Copy-Item README.md dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tailsplit-${{ matrix.arch }}
+          path: dist/
+          if-no-files-found: error

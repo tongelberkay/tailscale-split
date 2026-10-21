@@ -50,11 +50,11 @@ func TestSaveLoad(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(got, s) {
 		t.Fatalf("got %+v, %v", got, err)
 	}
-	if s.Mode != ModeProxy || s.ProxyPort != DefaultProxyPort {
+	if s.ProxyPort != DefaultProxyPort {
 		t.Fatalf("defaults: %+v", s)
 	}
-	if _, err := (Settings{Mode: "vpn"}).Normalized(); err == nil {
-		t.Fatal("unknown mode accepted")
+	if _, err := (Settings{ProxyPort: 80}).Normalized(); err == nil {
+		t.Fatal("privileged proxy port accepted")
 	}
 	if empty, err := Load(t.TempDir()); err != nil || len(empty.Apps) != 0 {
 		t.Fatalf("missing file: %+v, %v", empty, err)

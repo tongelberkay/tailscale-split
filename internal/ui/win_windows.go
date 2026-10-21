@@ -6,8 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
-	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -21,25 +19,6 @@ var (
 	kernel32         = windows.NewLazySystemDLL("kernel32.dll")
 	attachConsole    = kernel32.NewProc("AttachConsole")
 )
-
-// IsElevated reports whether this process runs as administrator.
-func IsElevated() bool {
-	return windows.GetCurrentProcessToken().IsElevated()
-}
-
-// RelaunchElevated starts this executable again through the UAC prompt.
-func RelaunchElevated(args []string) error {
-	exe, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	cwd, _ := os.Getwd()
-	params := make([]string, len(args))
-	for i, a := range args {
-		params[i] = syscall.EscapeArg(a)
-	}
-	return windows.ShellExecute(0, ptr("runas"), ptr(exe), ptr(strings.Join(params, " ")), ptr(cwd), windows.SW_NORMAL)
-}
 
 // Open opens a URL or file with its default handler.
 func Open(target string) error {

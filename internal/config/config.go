@@ -20,33 +20,20 @@ type Settings struct {
 	Apps []string `json:"apps"`
 	// Hostname is the name this device gets in the tailnet.
 	Hostname string `json:"hostname,omitempty"`
-	// Mode is "proxy" (default: a loopback proxy that only the selected apps
-	// may use; no adapter, no admin rights) or "tun" (a virtual adapter that
-	// every app's traffic passes through; works for apps without proxy
-	// support but can disturb others).
-	Mode string `json:"mode,omitempty"`
-	// ProxyPort is the loopback port of the proxy in proxy mode.
+	// ProxyPort is the loopback port of the proxy that only the selected apps
+	// may use.
 	ProxyPort int `json:"proxy_port,omitempty"`
 }
 
 const (
 	DefaultHostname  = "tailsplit-windows"
 	DefaultProxyPort = 47123
-	ModeProxy        = "proxy"
-	ModeTUN          = "tun"
 )
 
-// Normalized fills in defaults and rejects unknown values.
+// Normalized fills in defaults and rejects out-of-range values.
 func (s Settings) Normalized() (Settings, error) {
 	if s.Hostname == "" {
 		s.Hostname = DefaultHostname
-	}
-	s.Mode = strings.ToLower(strings.TrimSpace(s.Mode))
-	if s.Mode == "" {
-		s.Mode = ModeProxy
-	}
-	if s.Mode != ModeProxy && s.Mode != ModeTUN {
-		return s, fmt.Errorf("mode must be %q or %q, not %q", ModeProxy, ModeTUN, s.Mode)
 	}
 	if s.ProxyPort == 0 {
 		s.ProxyPort = DefaultProxyPort

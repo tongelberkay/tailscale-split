@@ -5,9 +5,6 @@ go 1.27.3
 require (
 	fyne.io/systray v1.12.2
 	golang.org/x/sys v0.48.0
-	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2
-	golang.zx2c4.com/wireguard/windows v1.0.1
-	gvisor.dev/gvisor v0.0.0-20260915211658-a6f909f08a72
 	tailscale.com v1.104.2
 )
 
@@ -51,4 +48,7 @@ require (
 	golang.org/x/term v0.46.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
+	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
+	golang.zx2c4.com/wireguard/windows v1.0.1 // indirect
+	gvisor.dev/gvisor v0.0.0-20260915211658-a6f909f08a72 // indirect
 )
