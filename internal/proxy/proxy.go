@@ -73,6 +73,14 @@ func (s *Server) handle(c net.Conn) {
 	if s.Allow != nil && !s.Allow(remote, local) {
 		io.WriteString(c, "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
 		s.Logf("proxy: refused %v (not a selected app)", remote)
+		// Closing with the request still unread makes Windows send a reset,
+		// which can discard the 403 before the client reads it. Finish
+		// sending, then drain what the client sent before closing.
+		if tc, ok := c.(*net.TCPConn); ok {
+			tc.CloseWrite()
+		}
+		c.SetReadDeadline(time.Now().Add(time.Second))
+		io.Copy(io.Discard, io.LimitReader(c, 64<<10))
 		return
 	}
 	br := bufio.NewReader(c)
