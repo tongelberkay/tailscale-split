@@ -2,6 +2,9 @@
 // leaves every other app on the normal internet connection.
 package main
 
+//go:generate go run ./tools/mkicon
+//go:generate go run github.com/akavel/rsrc@v0.10.2 -ico assets/tailsplit.ico -arch amd64 -o rsrc_windows_amd64.syso
+
 import (
 	"fmt"
 	"os"

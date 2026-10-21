@@ -16,10 +16,10 @@ import (
 )
 
 var (
-	iconOff     = Icon(0x8a, 0x93, 0xa0) // grey: not routing
-	iconWaiting = Icon(0xf2, 0xa9, 0x3b) // amber: starting or needs sign-in
-	iconOn      = Icon(0x2e, 0xb8, 0x72) // green: routing
-	iconBroken  = Icon(0xe0, 0x4f, 0x4f) // red: routing but exit node offline
+	iconOff     = Icon(0x8a, 0x93, 0xa0)                   // grey: not routing
+	iconWaiting = Icon(0xf2, 0xa9, 0x3b)                   // amber: starting or needs sign-in
+	iconOn      = Icon(AppColor.R, AppColor.G, AppColor.B) // full colour: routing
+	iconBroken  = Icon(0xe0, 0x4f, 0x4f)                   // red: routing but exit node offline
 )
 
 const maxAppItems = 24
