@@ -156,14 +156,15 @@ func TestEngineRoutesByProcess(t *testing.T) {
 	appStack, dev := newAppStack(t)
 
 	// Port 443 belongs to the "selected" app, everything else to another app.
-	lookup := func(f proc.Flow) string {
+	lookup := func(f proc.Flow) []string {
 		if f.Local.Addr().String() != appAddr {
 			t.Errorf("lookup got local %v, want the app's address", f.Local)
 		}
 		if f.Remote.Port() == 443 {
-			return selectedExe
+			// A helper process whose parent is the selected app.
+			return []string{`C:\Helper\msedgewebview2.exe`, selectedExe}
 		}
-		return `C:\Other\app.exe`
+		return []string{`C:\Other\app.exe`}
 	}
 	e, err := New(Config{Device: dev, MTU: 1500, Tailnet: tailnet.dial, Direct: direct.dial, Lookup: lookup, Logf: t.Logf},
 		policy.New([]string{selectedExe}))
@@ -236,7 +237,7 @@ func TestEngineRoutesByProcess(t *testing.T) {
 func TestEngineRefusesWhenUpstreamFails(t *testing.T) {
 	appStack, dev := newAppStack(t)
 	fail := func(context.Context, string, string) (net.Conn, error) { return nil, io.ErrUnexpectedEOF }
-	e, err := New(Config{Device: dev, Tailnet: fail, Direct: fail, Lookup: func(proc.Flow) string { return selectedExe }},
+	e, err := New(Config{Device: dev, Tailnet: fail, Direct: fail, Lookup: func(proc.Flow) []string { return []string{selectedExe} }},
 		policy.New([]string{selectedExe}))
 	if err != nil {
 		t.Fatal(err)

@@ -34,10 +34,11 @@ func New(apps []string) *Policy {
 	return p
 }
 
-// Decide picks the route for a flow from exePath to dst. exePath is empty
-// when the owning process could not be identified; such flows go direct.
-func (p *Policy) Decide(exePath string, dst netip.Addr) Route {
-	if exePath == "" || !p.apps[strings.ToLower(exePath)] {
+// Decide picks the route for a flow to dst. owner is the owning process's
+// executable path followed by its ancestors' paths; a flow is selected when
+// any of them is. An unidentified owner (nil) goes direct.
+func (p *Policy) Decide(owner []string, dst netip.Addr) Route {
+	if !p.Selected(owner) {
 		return Direct
 	}
 	if IsTailnet(dst) {
@@ -49,6 +50,16 @@ func (p *Policy) Decide(exePath string, dst netip.Addr) Route {
 		return Direct
 	}
 	return Tailnet
+}
+
+// Selected reports whether the process or one of its ancestors is selected.
+func (p *Policy) Selected(owner []string) bool {
+	for _, path := range owner {
+		if p.apps[strings.ToLower(path)] {
+			return true
+		}
+	}
+	return false
 }
 
 var (

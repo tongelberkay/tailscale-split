@@ -42,13 +42,19 @@ func TestValidateExitNode(t *testing.T) {
 
 func TestSaveLoad(t *testing.T) {
 	dir := t.TempDir()
-	s := Settings{ExitNode: "exit", Apps: []string{`C:\a\b.exe`}}
+	s, _ := Settings{ExitNode: "exit", Apps: []string{`C:\a\b.exe`}}.Normalized()
 	if err := Save(dir, s); err != nil {
 		t.Fatal(err)
 	}
 	got, err := Load(dir)
 	if err != nil || !reflect.DeepEqual(got, s) {
 		t.Fatalf("got %+v, %v", got, err)
+	}
+	if s.Mode != ModeProxy || s.ProxyPort != DefaultProxyPort {
+		t.Fatalf("defaults: %+v", s)
+	}
+	if _, err := (Settings{Mode: "vpn"}).Normalized(); err == nil {
+		t.Fatal("unknown mode accepted")
 	}
 	if empty, err := Load(t.TempDir()); err != nil || len(empty.Apps) != 0 {
 		t.Fatalf("missing file: %+v, %v", empty, err)

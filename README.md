@@ -4,14 +4,14 @@ Send only the apps you choose through a Tailscale exit node. Everything
 else stays on your normal internet connection.
 
 This is a Go rewrite of the earlier Python and sing-box prototype. It
-ships as one `tailsplit.exe` (about 20 MB) plus the signed `wintun.dll`
-(about 0.4 MB). The old build needed `sing-box.exe` (82 MB) and
+ships as one `tailsplit.exe` (about 20 MB). TUN mode also needs the signed
+`wintun.dll` (about 0.4 MB), which proxy mode doesn't. The old build needed `sing-box.exe` (82 MB) and
 `libcronet.dll` (9.5 MB), plus a bundled Python runtime.
 
 ## Build
 
 ```powershell
-.\build.ps1          # runs the tests, builds dist\tailsplit.exe, fetches wintun.dll
+.\build.ps1          # runs the tests, builds dist\tailsplit.exe, fetches wintun.dll (TUN mode only)
 ```
 
 You need Go 1.27.3 or newer (Tailscale v1.104 requires it). An older Go fetches the right toolchain
@@ -19,28 +19,52 @@ by itself. The build uses no cgo, no Python and no installer.
 
 ## Use
 
-1. Run `dist\tailsplit.exe` and accept the administrator prompt. Creating
-   the network adapter needs it. A tray icon appears.
-2. The first time, your browser opens the Tailscale sign-in page. TailSplit
-   is its own device in your tailnet (`tailsplit-windows`) and does not
-   touch the regular Tailscale client.
-3. Set the exit node with tray › **Edit settings...**, or with
-   `tailsplit exit-node <tailscale-ip-or-name>`.
-4. Add apps with tray › **Add apps...** (multi-select works), or with
-   `tailsplit add "C:\Path\App.exe"`. To remove one, click it under
-   **Apps using the exit node**.
-5. Click **Start routing**. Restart the apps you chose so that they open
-   new connections.
+There are two modes. **Proxy mode** is the default and the recommended one.
 
-Tray icon colours: grey means not routing, amber means starting or waiting
-for sign-in, green means routing, red means routing but the exit node is offline.
+### Proxy mode (default): nothing else is touched
+
+TailSplit runs a proxy on `127.0.0.1:47123` that exits through the tailnet.
+Only the apps you list may use it: each connection to the proxy is checked
+against the process that owns it, or that process's parent. There is no
+network adapter, no route change and no administrator prompt, so Edge,
+Teams and everything else keep their normal network.
+
+1. Run `tailsplit.exe`. A tray icon appears, and the first time your
+   browser opens the Tailscale sign-in page. TailSplit is its own device
+   in your tailnet (`tailsplit-windows`), separate from the regular
+   Tailscale client.
+2. Set the exit node: `tailsplit exit-node <tailscale-ip-or-name>`, or use
+   tray › **Edit settings...**.
+3. Add apps with tray › **Add running app...** (search by name or path,
+   multi-select) or **Add app from file...**.
+4. **Quit the app completely**, then use tray › *app* › **Launch through
+   the tailnet**, or `tailsplit launch codex` from a shortcut. The app
+   starts with `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` set, plus
+   `--proxy-server` for Chromium and Electron apps. Its child processes
+   inherit the settings.
+
+This only works for apps that respect proxy settings, which covers most
+command-line tools and Electron apps. Microsoft Store apps can only be
+started this way if they have an app execution alias.
+
+### TUN mode: for apps that ignore proxies
+
+`tailsplit mode tun` uses a virtual adapter that every app's traffic passes
+through, and matches flows to processes. It needs administrator rights.
+**It can break other apps:** on managed PCs, Edge and Teams showed
+`ERR_NETWORK_ACCESS_DENIED` and failed to send messages while the old
+prototype's adapter was up, even though they weren't selected.
+
+### Both modes
+
+Tray icon colours: grey means off, amber means starting or waiting for
+sign-in, green means on, red means on but the exit node is offline.
 
 Settings, the log and the node's keys live in `%LOCALAPPDATA%\TailSplit`.
 Treat that folder like a password. Editing `settings.json` by hand is
-picked up within about 2 seconds, and app list changes apply to new
-connections without a restart.
+picked up within about 2 seconds.
 
-## How it works
+## How TUN mode works
 
 ```
 app ──► Windows routing ──► TailSplit adapter (0.0.0.0/1 + 128.0.0.0/1)
@@ -68,18 +92,17 @@ app ──► Windows routing ──► TailSplit adapter (0.0.0.0/1 + 128.0.0.0
 
 ## Known limits
 
-* Unselected apps' traffic still passes through the userspace stack before
-  going out directly. A later version can replace this steering layer with
-  a WinDivert-based one that captures only the selected apps.
+* TUN mode: unselected apps' traffic still passes through the userspace
+  stack, which is why proxy mode is the default.
 * DNS stays with Windows. Selected apps' lookups use your normal resolver,
   not the exit node's.
-* ICMP is not forwarded, so `ping` to internet hosts fails while routing is
+* TUN mode: ICMP is not forwarded, so `ping` to internet hosts fails while routing is
   on (LAN pings still work).
 * There is no kill switch when routing is **stopped**: apps then use the
   normal network.
-* An app is matched by its exact `.exe` path. Helper processes such as
-  `codex.exe` next to `ChatGPT.exe` need adding separately, and Store app
-  updates can change paths.
+* An app is matched by its exact `.exe` path, or by its parent's or
+  grandparent's path (up to 4 levels), so helpers it starts, such as
+  `msedgewebview2.exe` under Teams, follow it. Store app updates can change paths.
 * The tray lists the first 24 apps. `settings.json` can hold more.
 * Uploads of Tailscale client logs to Tailscale are turned off. Local logs go
   to `tailsplit.log`, with sign-in links and keys redacted.
@@ -90,11 +113,12 @@ app ──► Windows routing ──► TailSplit adapter (0.0.0.0/1 + 128.0.0.0
 |---|---|
 | `internal/engine` | packet pump, gVisor stack, TCP/UDP forwarding (tested end to end over a fake TUN) |
 | `internal/policy` | per-flow decision: tailnet or direct |
-| `internal/proc` | socket → PID → .exe lookup via iphlpapi |
+| `internal/proc` | socket → PID → .exe (+ parents) lookup via iphlpapi, running-process list |
+| `internal/proxy` | loopback HTTP CONNECT proxy that only selected processes may use |
 | `internal/tailnet` | tsnet node, sign-in, exit node selection, leak guard |
 | `internal/winnet` | Wintun adapter, addresses/routes, NIC-pinned direct dialer |
 | `internal/app` | start/stop orchestration |
-| `internal/ui` | tray, file picker, elevation, icon |
+| `internal/ui` | tray, file picker, running-app picker, launcher, elevation, icon |
 
 Licences: Tailscale is BSD-3-Clause, wireguard-go is MIT, and gVisor and
 fyne systray are Apache-2.0, so there are no GPL obligations, unlike sing-box.

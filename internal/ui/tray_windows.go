@@ -12,6 +12,7 @@ import (
 
 	"tailsplit/internal/app"
 	"tailsplit/internal/config"
+	"tailsplit/internal/proc"
 )
 
 var (
@@ -23,14 +24,20 @@ var (
 
 const maxAppItems = 24
 
+// appItem is one app in the menu, with its own actions.
+type appItem struct {
+	top, launch, remove *systray.MenuItem
+}
+
 type tray struct {
 	a       *app.App
 	logPath string
 
 	status, signIn, toggle, exitNode *systray.MenuItem
 	apps                             *systray.MenuItem
-	appItems                         []*systray.MenuItem
-	addApp, editSettings, openLog    *systray.MenuItem
+	appItems                         []appItem
+	addRunning, addApp               *systray.MenuItem
+	editSettings, openLog            *systray.MenuItem
 	logout, quit                     *systray.MenuItem
 
 	mu      sync.Mutex
@@ -56,13 +63,19 @@ func (t *tray) ready() {
 	t.signIn.Hide()
 	systray.AddSeparator()
 	t.toggle = systray.AddMenuItem("Start routing", "")
-	t.apps = systray.AddMenuItem("Apps using the exit node", "Click an app to remove it")
+	t.apps = systray.AddMenuItem("Apps using the exit node", "")
 	for range maxAppItems {
-		it := t.apps.AddSubMenuItem("", "Remove this app")
-		it.Hide()
+		top := t.apps.AddSubMenuItem("", "")
+		it := appItem{
+			top:    top,
+			launch: top.AddSubMenuItem("Launch through the tailnet", "Start this app with the TailSplit proxy"),
+			remove: top.AddSubMenuItem("Remove", "Stop sending this app through the exit node"),
+		}
+		top.Hide()
 		t.appItems = append(t.appItems, it)
 	}
-	t.addApp = systray.AddMenuItem("Add apps...", "Choose .exe files whose traffic should use the exit node")
+	t.addRunning = systray.AddMenuItem("Add running app...", "Pick from running programs, searchable by name and path")
+	t.addApp = systray.AddMenuItem("Add app from file...", "Choose .exe files whose traffic should use the exit node")
 	t.editSettings = systray.AddMenuItem("Edit settings...", "Exit node and app list, as JSON")
 	t.openLog = systray.AddMenuItem("Open log", "")
 	systray.AddSeparator()
@@ -83,8 +96,13 @@ func (t *tray) ready() {
 func (t *tray) loop() {
 	for i, it := range t.appItems {
 		go func() {
-			for range it.ClickedCh {
-				t.removeApp(i)
+			for {
+				select {
+				case <-it.remove.ClickedCh:
+					t.removeApp(i)
+				case <-it.launch.ClickedCh:
+					go t.launch(i)
+				}
 			}
 		}()
 	}
@@ -105,7 +123,9 @@ func (t *tray) loop() {
 				go t.a.Stop()
 			}
 		case <-t.addApp.ClickedCh:
-			go t.pickApps()
+			go t.addApps(PickExecutables())
+		case <-t.addRunning.ClickedCh:
+			go func() { t.addApps(PickRunning(t.a.Snapshot().Settings.Apps)) }()
 		case <-t.editSettings.ClickedCh:
 			p := config.Path(t.a.Dir)
 			if _, err := os.Stat(p); err != nil {
@@ -127,8 +147,7 @@ func (t *tray) loop() {
 	}
 }
 
-func (t *tray) pickApps() {
-	paths := PickExecutables()
+func (t *tray) addApps(paths []string) {
 	if len(paths) == 0 {
 		return
 	}
@@ -138,6 +157,33 @@ func (t *tray) pickApps() {
 	})
 	if err != nil {
 		Error("TailSplit", err.Error())
+	}
+}
+
+// launch starts app i through the proxy, starting routing first if needed.
+func (t *tray) launch(i int) {
+	s := t.a.Snapshot()
+	if i >= len(s.Settings.Apps) {
+		return
+	}
+	exe := s.Settings.Apps[i]
+	for _, r := range proc.Running() {
+		if strings.EqualFold(r, exe) {
+			// A second start would only hand off to the running copy, which
+			// has no proxy settings.
+			Info("TailSplit", filepath.Base(exe)+" is already running without the proxy.\n\n"+
+				"Quit it completely (including from the tray), then choose Launch again.")
+			return
+		}
+	}
+	if s.State == app.Stopped {
+		if err := t.a.Start(); err != nil {
+			Error("TailSplit could not start", err.Error())
+			return
+		}
+	}
+	if err := Launch(exe, t.a.ProxyURL()); err != nil {
+		Error("TailSplit could not launch "+filepath.Base(exe), err.Error())
 	}
 }
 
@@ -197,6 +243,10 @@ func (t *tray) render() {
 		t.status.SetTitle("Routing, but the exit node is offline")
 		t.signIn.Hide()
 		systray.SetIcon(iconBroken)
+	case s.State == app.Routing && s.ProxyAddr != "":
+		t.status.SetTitle(fmt.Sprintf("Proxy on %s: %d connections via exit node, %d refused", s.ProxyAddr, s.FlowsTailnet, s.FlowsDirect))
+		t.signIn.Hide()
+		systray.SetIcon(iconOn)
 	case s.State == app.Routing:
 		t.status.SetTitle(fmt.Sprintf("Routing: %d flows via exit node, %d direct", s.FlowsTailnet, s.FlowsDirect))
 		t.signIn.Hide()
@@ -229,12 +279,18 @@ func (t *tray) render() {
 	}
 	systray.SetTooltip("TailSplit: " + s.State.String())
 
+	proxyMode := s.Settings.Mode == config.ModeProxy
 	for i, it := range t.appItems {
 		if i < len(s.Settings.Apps) {
-			it.SetTitle(filepath.Base(s.Settings.Apps[i]) + "   " + s.Settings.Apps[i])
-			it.Show()
+			it.top.SetTitle(filepath.Base(s.Settings.Apps[i]) + "   " + s.Settings.Apps[i])
+			it.top.Show()
+			if proxyMode {
+				it.launch.Show()
+			} else {
+				it.launch.Hide()
+			}
 		} else {
-			it.Hide()
+			it.top.Hide()
 		}
 	}
 	t.apps.SetTitle(fmt.Sprintf("Apps using the exit node (%d)", len(s.Settings.Apps)))

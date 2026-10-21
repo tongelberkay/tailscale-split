@@ -6,13 +6,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"net/netip"
+	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"tailsplit/internal/config"
 	"tailsplit/internal/engine"
 	"tailsplit/internal/policy"
 	"tailsplit/internal/proc"
+	"tailsplit/internal/proxy"
 	"tailsplit/internal/tailnet"
 	"tailsplit/internal/winnet"
 )
@@ -36,7 +41,8 @@ type Snapshot struct {
 	Settings     config.Settings
 	Err          string
 	FlowsTailnet int64 // flows sent through the tailnet since start
-	FlowsDirect  int64
+	FlowsDirect  int64 // TUN mode: flows sent direct; proxy mode: refused clients
+	ProxyAddr    string
 }
 
 type App struct {
@@ -55,15 +61,16 @@ type App struct {
 	settings config.Settings
 	eng      *engine.Engine
 	tun      *winnet.Tun
+	ln       net.Listener // proxy mode
+
+	pol                    atomic.Pointer[policy.Policy]
+	proxyServed, proxyDeny atomic.Int64
 }
 
 func New(dir string, logf func(string, ...any)) (*App, error) {
 	s, err := config.Load(dir)
 	if err != nil {
 		return nil, err
-	}
-	if s.Hostname == "" {
-		s.Hostname = config.DefaultHostname
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	a := &App{Dir: dir, Logf: logf, ctx: ctx, cancel: cancel, settings: s}
@@ -105,6 +112,11 @@ func (a *App) Snapshot() Snapshot {
 	if a.eng != nil {
 		s.FlowsTailnet = a.eng.FlowsTailnet.Load()
 		s.FlowsDirect = a.eng.FlowsDirect.Load()
+	}
+	if a.ln != nil {
+		s.FlowsTailnet = a.proxyServed.Load()
+		s.FlowsDirect = a.proxyDeny.Load()
+		s.ProxyAddr = a.ln.Addr().String()
 	}
 	return s
 }
@@ -162,6 +174,10 @@ func (a *App) start(s config.Settings) error {
 	if err := a.node.SetExitNode(ctx, exit); err != nil {
 		return err
 	}
+	a.pol.Store(policy.New(s.Apps))
+	if s.Mode == config.ModeProxy {
+		return a.startProxy(s)
+	}
 	v6 := winnet.NativeIPv6()
 	tun, err := winnet.Open(v6)
 	if err != nil {
@@ -193,15 +209,55 @@ func (a *App) start(s config.Settings) error {
 	return nil
 }
 
+// startProxy listens on loopback only. Each client connection is checked
+// against the app list by looking up which process owns its socket, so other
+// programs on this PC cannot borrow the exit node.
+func (a *App) startProxy(s config.Settings) error {
+	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(s.ProxyPort))
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("proxy port %d is busy (set proxy_port in settings): %w", s.ProxyPort, err)
+	}
+	srv := &proxy.Server{
+		Dial: a.node.Dial,
+		Allow: func(remote, local netip.AddrPort) bool {
+			ok := a.pol.Load().Selected(proc.Lookup(proc.Flow{Local: remote, Remote: local}))
+			if ok {
+				a.proxyServed.Add(1)
+			} else {
+				a.proxyDeny.Add(1)
+			}
+			return ok
+		},
+		Logf: a.Logf,
+	}
+	a.mu.Lock()
+	a.ln = ln
+	a.mu.Unlock()
+	go srv.Serve(ln)
+	a.Logf("proxy for %d app(s) on http://%s via %s", len(s.Apps), addr, s.ExitNode)
+	return nil
+}
+
+// ProxyURL is what launched apps are pointed at.
+func (a *App) ProxyURL() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(a.settings.ProxyPort))
+}
+
 // Stop removes the TUN and its routes. The tailnet node stays signed in.
 func (a *App) Stop() {
 	a.mu.Lock()
-	eng := a.eng
-	a.eng, a.tun = nil, nil
+	eng, ln := a.eng, a.ln
+	a.eng, a.tun, a.ln = nil, nil, nil
 	was := a.state
 	a.mu.Unlock()
 	if eng != nil {
 		eng.Close() // also closes the TUN
+	}
+	if ln != nil {
+		ln.Close() // open tunnels finish on their own
 	}
 	if was != Stopped {
 		a.Logf("routing stopped")
@@ -224,6 +280,9 @@ func (a *App) UpdateSettings(f func(*config.Settings) error) error {
 		return err
 	}
 	s.Apps = apps
+	if s, err = s.Normalized(); err != nil {
+		return err
+	}
 	if err := config.Save(a.Dir, s); err != nil {
 		return err
 	}
@@ -236,9 +295,6 @@ func (a *App) Reload() error {
 	if err != nil {
 		return err
 	}
-	if s.Hostname == "" {
-		s.Hostname = config.DefaultHostname
-	}
 	return a.apply(s)
 }
 
@@ -247,9 +303,13 @@ func (a *App) apply(s config.Settings) error {
 	exitChanged := s.ExitNode != a.settings.ExitNode
 	a.settings = s
 	eng := a.eng
+	running := a.state == Routing
 	a.mu.Unlock()
+	a.pol.Store(policy.New(s.Apps))
 	if eng != nil {
 		eng.SetPolicy(policy.New(s.Apps))
+	}
+	if running {
 		if exitChanged {
 			if err := a.node.SetExitNode(a.ctx, s.ExitNode); err != nil {
 				a.changed()

@@ -1,4 +1,4 @@
-# Builds dist\tailsplit.exe (one file) and fetches wintun.dll beside it.
+# Builds dist\tailsplit.exe (one file) and fetches wintun.dll beside it for TUN mode.
 # Needs Go 1.25+ (https://go.dev/dl/). Nothing is installed system-wide.
 $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
@@ -24,6 +24,9 @@ $env:CGO_ENABLED = '0'
 go build -trimpath -tags $tags -ldflags '-s -w -H windowsgui' -o dist\tailsplit.exe .
 if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
 
-if (!(Test-Path -LiteralPath dist\wintun.dll)) { & .\fetch-wintun.ps1 -Destination dist }
+# Only TUN mode needs wintun.dll; proxy mode (the default) runs without it.
+if (!(Test-Path -LiteralPath dist\wintun.dll)) {
+  try { & .\fetch-wintun.ps1 -Destination dist } catch { Write-Warning "wintun.dll not fetched (only needed for TUN mode): $_" }
+}
 $size = [math]::Round((Get-Item dist\tailsplit.exe).Length / 1MB, 1)
-Write-Host "Built dist\tailsplit.exe ($size MB). Keep wintun.dll in the same folder."
+Write-Host "Built dist\tailsplit.exe ($size MB). For TUN mode keep wintun.dll in the same folder."

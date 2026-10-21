@@ -47,8 +47,9 @@ type Config struct {
 	Tailnet DialFunc
 	// Direct dials through the physical network, bypassing the TUN.
 	Direct DialFunc
-	// Lookup maps a flow to its owning executable path ("" if unknown).
-	Lookup func(proc.Flow) string
+	// Lookup maps a flow to its owner's executable path followed by its
+	// ancestors' paths (nil if unknown).
+	Lookup func(proc.Flow) []string
 	Logf   func(format string, args ...any)
 }
 
@@ -193,7 +194,7 @@ func addrPort(a tcpip.Address, port uint16) netip.AddrPort {
 // route resolves which way a new flow goes. In the forwarder's view the
 // "local" end is the destination the app dialed and the "remote" end is
 // the app itself.
-func (e *Engine) route(udp bool, id stack.TransportEndpointID) (src, dst netip.AddrPort, r policy.Route, exe string) {
+func (e *Engine) route(udp bool, id stack.TransportEndpointID) (src, dst netip.AddrPort, r policy.Route, exe []string) {
 	src = addrPort(id.RemoteAddress, id.RemotePort)
 	dst = addrPort(id.LocalAddress, id.LocalPort)
 	exe = e.cfg.Lookup(proc.Flow{UDP: udp, Local: src, Remote: dst})
@@ -326,10 +327,11 @@ func relayUDP(a, b net.Conn, idle time.Duration) {
 	<-done
 }
 
-func exeName(p string) string {
-	if p == "" {
+func exeName(owner []string) string {
+	if len(owner) == 0 {
 		return "unknown process"
 	}
+	p := owner[0]
 	for i := len(p) - 1; i >= 0; i-- {
 		if p[i] == '\\' || p[i] == '/' {
 			return p[i+1:]
