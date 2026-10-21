@@ -5,19 +5,27 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"tailsplit/internal/app"
 	"tailsplit/internal/config"
 	"tailsplit/internal/logfile"
+	"tailsplit/internal/oneshot"
+	"tailsplit/internal/proc"
 	"tailsplit/internal/ui"
 )
 
 const usage = `TailSplit: route chosen apps through a Tailscale exit node.
 
 Usage:
+  tailsplit <app.exe> [--exit-node <name>] [-- app args]
+                               run one app through the exit node, no tray;
+                               stops when the app and its child processes exit
   tailsplit                    tray app
   tailsplit run                route in this console until Ctrl+C
   tailsplit launch <app>       start a listed app (name or path) through the proxy;
@@ -51,6 +59,13 @@ func run(args []string) error {
 	dir, err := config.Dir()
 	if err != nil {
 		return err
+	}
+	if len(args) > 0 && (oneshot.LooksLikeApp(args[0]) || strings.HasPrefix(args[0], "-")) {
+		a, err := oneshot.Parse(args)
+		if err != nil {
+			return fmt.Errorf("%v\n\n%s", err, usage)
+		}
+		return runApp(dir, a)
 	}
 	cmd := ""
 	if len(args) > 0 {
@@ -160,14 +175,14 @@ func or(a, b string) string {
 	return a
 }
 
-func prepare(dir string, echo bool) (*app.App, *logfile.Log, func(), error) {
+func prepare(dir string, echo, forceProxy bool) (*app.App, *logfile.Log, func(), error) {
 	s, err := config.Load(dir)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	// Only the adapter needs administrator rights. In proxy mode, staying
 	// unelevated also means launched apps don't run as administrator.
-	if s.Mode == config.ModeTUN && !ui.IsElevated() {
+	if s.Mode == config.ModeTUN && !forceProxy && !ui.IsElevated() {
 		return nil, nil, nil, errNeedsAdmin
 	}
 	ok, release := ui.SingleInstance()
@@ -200,7 +215,7 @@ func prepare(dir string, echo bool) (*app.App, *logfile.Log, func(), error) {
 var errNeedsAdmin = fmt.Errorf("tun mode needs administrator rights to create the network adapter")
 
 func tray(dir string) error {
-	a, log, done, err := prepare(dir, false)
+	a, log, done, err := prepare(dir, false, false)
 	if err == errNeedsAdmin {
 		return ui.RelaunchElevated(nil)
 	}
@@ -213,8 +228,116 @@ func tray(dir string) error {
 	return nil
 }
 
+// resolveApp turns what the user typed into an executable path: a path, a
+// program on PATH, a name from the app list, or a running program's name.
+func resolveApp(name string, listed []string) (string, error) {
+	if filepath.IsAbs(name) || strings.ContainsAny(name, `\/`) {
+		p, err := filepath.Abs(name)
+		if err != nil {
+			return "", err
+		}
+		if _, err := os.Stat(p); err != nil {
+			return "", err
+		}
+		return p, nil
+	}
+	if p, err := exec.LookPath(name); err == nil {
+		return filepath.Abs(p)
+	}
+	match := func(p string) bool {
+		b := filepath.Base(p)
+		return strings.EqualFold(b, name) || strings.EqualFold(strings.TrimSuffix(b, filepath.Ext(b)), name)
+	}
+	for _, p := range listed {
+		if match(p) {
+			return p, nil
+		}
+	}
+	for _, p := range proc.Running() {
+		if match(p) {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("can't find %q: give its full path", name)
+}
+
+// runApp is the one-shot mode: sign in if needed, serve the proxy for this
+// app only, launch it, and exit once it and its child processes are gone.
+func runApp(dir string, args oneshot.Args) error {
+	s, err := config.Load(dir)
+	if err != nil {
+		return err
+	}
+	exe, err := resolveApp(args.App, s.Apps)
+	if err != nil {
+		return err
+	}
+	if args.ExitNode != "" {
+		if args.ExitNode, err = config.ValidateExitNode(args.ExitNode); err != nil {
+			return err
+		}
+	}
+	if ok, release := ui.SingleInstance(); !ok {
+		return fmt.Errorf("the TailSplit tray app is running; use the tray or `tailsplit launch %s` instead", filepath.Base(exe))
+	} else {
+		release() // prepare takes it again
+	}
+	if proc.AliveUnder(exe) {
+		return fmt.Errorf("%s is already running without the proxy; quit it completely first", filepath.Base(exe))
+	}
+
+	a, _, done, err := prepare(dir, true, true)
+	if err != nil {
+		return err
+	}
+	defer done()
+	defer a.Close()
+	err = a.Override(func(s *config.Settings) {
+		s.Mode = config.ModeProxy
+		s.Apps = []string{exe} // only this app (and its children) may use the proxy
+		if args.ExitNode != "" {
+			s.ExitNode = args.ExitNode
+		}
+	})
+	if err != nil {
+		return err
+	}
+	var (
+		mu    sync.Mutex
+		shown string
+	)
+	a.OnChange = func() {
+		u := a.Snapshot().Tailnet.AuthURL
+		mu.Lock()
+		fresh := u != "" && u != shown
+		shown = u
+		mu.Unlock()
+		if fresh {
+			fmt.Fprintln(os.Stderr, "Sign in to Tailscale in your browser:", u)
+			ui.Open(u)
+		}
+	}
+	if err := a.Start(); err != nil {
+		return err
+	}
+	if err := ui.Launch(exe, a.ProxyURL(), args.AppArgs...); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "%s is running through %s. TailSplit stops when it exits.\n",
+		filepath.Base(exe), a.Snapshot().Settings.ExitNode)
+
+	// Launchers often exit at once and leave the real app running, so wait
+	// on the whole family of processes rather than the first one.
+	time.Sleep(10 * time.Second)
+	for proc.AliveUnder(exe) {
+		time.Sleep(2 * time.Second)
+	}
+	fmt.Fprintf(os.Stderr, "%s exited; stopping.\n", filepath.Base(exe))
+	return nil
+}
+
 func console(dir string) error {
-	a, _, done, err := prepare(dir, true)
+	a, _, done, err := prepare(dir, true, false)
 	if err != nil {
 		return err
 	}

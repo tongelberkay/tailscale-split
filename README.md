@@ -43,6 +43,20 @@ Teams and everything else keep their normal network.
    `--proxy-server` for Chromium and Electron apps. Its child processes
    inherit the settings.
 
+**One command, no tray:**
+
+```powershell
+tailsplit.exe codex.exe --exit-node home-server
+tailsplit.exe "C:\Path\App.exe" -e 100.64.0.7 -- --app-arg
+```
+
+This signs in if needed, lets only that app (and the processes it starts)
+use the proxy, launches it, and exits once the app and its children have
+closed. The app can be a full path, a program on `PATH`, a name from your
+app list, or the name of a running program. Without `--exit-node`, the
+saved exit node is used. It doesn't save anything. It can't run while the
+tray app is running; use the tray's Launch item then.
+
 This only works for apps that respect proxy settings, which covers most
 command-line tools and Electron apps. Microsoft Store apps can only be
 started this way if they have an app execution alias.

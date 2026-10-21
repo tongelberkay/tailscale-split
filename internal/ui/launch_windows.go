@@ -12,11 +12,12 @@ import (
 // tools and most runtimes read the *_PROXY variables; Chromium and Electron
 // apps ignore them on Windows and need --proxy-server instead. Child
 // processes inherit both.
-func Launch(exe, proxyURL string) error {
+func Launch(exe, proxyURL string, extra ...string) error {
 	var args []string
 	if isChromium(exe) {
 		args = append(args, "--proxy-server="+proxyURL)
 	}
+	args = append(args, extra...)
 	env := append(os.Environ(),
 		"HTTPS_PROXY="+proxyURL, "HTTP_PROXY="+proxyURL, "ALL_PROXY="+proxyURL,
 		"NO_PROXY=localhost,127.0.0.1,::1")

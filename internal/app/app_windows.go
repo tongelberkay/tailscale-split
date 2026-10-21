@@ -289,6 +289,20 @@ func (a *App) UpdateSettings(f func(*config.Settings) error) error {
 	return a.apply(s)
 }
 
+// Override changes settings for this run only, without saving them.
+func (a *App) Override(f func(*config.Settings)) error {
+	a.mu.Lock()
+	s := a.settings
+	s.Apps = append([]string(nil), s.Apps...)
+	a.mu.Unlock()
+	f(&s)
+	s, err := s.Normalized()
+	if err != nil {
+		return err
+	}
+	return a.apply(s)
+}
+
 // Reload re-reads settings.json after the user edited it by hand.
 func (a *App) Reload() error {
 	s, err := config.Load(a.Dir)
