@@ -82,26 +82,32 @@ func bmp(img *image.NRGBA) []byte {
 	return out.Bytes()
 }
 
-// Render draws the glyph: one path that forks, with the upper branch ending
-// in a node (the tailnet) and the lower one running straight on (everything
-// else), on a rounded square. Coordinates are in units of the icon size.
+// Render draws the glyph: a T whose stem splits into the two arms of the
+// crossbar. The right arm ends in a node (the tailnet), the left one is plain
+// (everything else). It sits on a rounded square; coordinates are in units of
+// the icon size.
 func Render(size int, bg color.NRGBA) *image.NRGBA {
 	const ss = 4 // supersampling per axis
-	stroke := 0.105
+	stroke := 0.14
 	if size <= 20 {
-		stroke = 0.13 // keep lines solid at tray size
+		stroke = 0.16 // keep lines solid at tray size
 	}
 	type pt struct{ x, y float64 }
-	trunk := []pt{{0.17, 0.64}, {0.42, 0.64}}
-	straight := []pt{{0.42, 0.64}, {0.83, 0.64}}
-	var upper []pt
-	for i := 0; i <= 24; i++ { // quadratic curve from the fork to the node
-		t := float64(i) / 24
-		p0, p1, p2 := pt{0.42, 0.64}, pt{0.62, 0.64}, pt{0.71, 0.34}
-		u := 1 - t
-		upper = append(upper, pt{u*u*p0.x + 2*u*t*p1.x + t*t*p2.x, u*u*p0.y + 2*u*t*p1.y + t*t*p2.y})
+	curve := func(p0, p1, p2 pt) []pt { // quadratic Bezier as a polyline
+		var line []pt
+		for i := 0; i <= 24; i++ {
+			t := float64(i) / 24
+			u := 1 - t
+			line = append(line, pt{u*u*p0.x + 2*u*t*p1.x + t*t*p2.x, u*u*p0.y + 2*u*t*p1.y + t*t*p2.y})
+		}
+		return line
 	}
-	node, nodeR := pt{0.72, 0.30}, 0.115
+	stem := []pt{{0.5, 0.80}, {0.5, 0.46}}
+	left := curve(pt{0.5, 0.46}, pt{0.5, 0.29}, pt{0.30, 0.29})
+	leftBar := []pt{{0.30, 0.29}, {0.19, 0.29}}
+	right := curve(pt{0.5, 0.46}, pt{0.5, 0.29}, pt{0.66, 0.29})
+	node, nodeR := pt{0.76, 0.29}, 0.115
+	lines := [][]pt{stem, left, leftBar, right}
 
 	segDist := func(p pt, line []pt) float64 {
 		best := math.Inf(1)
@@ -134,8 +140,11 @@ func Render(size int, bg color.NRGBA) *image.NRGBA {
 					}
 					bgN++
 					h := stroke / 2
-					if segDist(p, trunk) <= h || segDist(p, straight) <= h || segDist(p, upper) <= h ||
-						math.Hypot(p.x-node.x, p.y-node.y) <= nodeR {
+					hit := math.Hypot(p.x-node.x, p.y-node.y) <= nodeR
+					for _, l := range lines {
+						hit = hit || segDist(p, l) <= h
+					}
+					if hit {
 						fgN++
 					}
 				}
