@@ -37,8 +37,9 @@ Teams and everything else keep their normal network.
    browser opens the Tailscale sign-in page. TailSplit is its own device
    in your tailnet (`tailsplit-windows`), separate from the regular
    Tailscale client.
-2. Set the exit node: `tailsplit exit-node <tailscale-ip-or-name>`, or use
-   tray › **Edit settings...**.
+2. Pick the exit node from tray › **Exit node**, which lists every exit
+   node this device may use and whether it's online. From a terminal,
+   `tailsplit exit-nodes` lists them and `tailsplit exit-node <name>` sets one.
 3. Add apps with tray › **Add running app...** (search by name or path,
    multi-select) or **Add app from file...**.
 4. **Quit the app completely**, then use tray › *app* › **Launch through
@@ -75,8 +76,15 @@ prototype's adapter was up, even though they weren't selected.
 
 ### Both modes
 
+**Sign-in expiry.** Like any Tailscale device, TailSplit's sign-in expires
+(180 days by default). The tray shows the date. When it passes, routing
+stops sending traffic (it doesn't fall back to your normal connection), the
+icon turns amber and your browser opens the sign-in page. After you sign
+in, TailSplit selects the exit node again by itself. To skip this, disable
+key expiry for `tailsplit-windows` in the Tailscale admin console.
+
 Tray icon colours: grey means off, amber means starting or waiting for
-sign-in, green means on, red means on but the exit node is offline.
+sign-in, the full-colour icon means on, red means on but the exit node is offline.
 
 Settings, the log and the node's keys live in `%LOCALAPPDATA%\TailSplit`.
 Treat that folder like a password. Editing `settings.json` by hand is

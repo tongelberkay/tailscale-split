@@ -74,7 +74,25 @@ func New(dir string, logf func(string, ...any)) (*App, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	a := &App{Dir: dir, Logf: logf, ctx: ctx, cancel: cancel, settings: s}
-	a.node = tailnet.New(dir, s.Hostname, logf, func(tailnet.Status) { a.changed() })
+	var (
+		stateMu   sync.Mutex
+		lastState string
+	)
+	a.node = tailnet.New(dir, s.Hostname, logf, func(ts tailnet.Status) {
+		stateMu.Lock()
+		prev := lastState
+		lastState = ts.State
+		stateMu.Unlock()
+		if prev != "" && ts.State != prev {
+			logf("tailnet: %s -> %s", prev, ts.State)
+			// After signing in again (an expired key, for example), select
+			// the exit node again in case it was dropped while signed out.
+			if ts.State == "Running" {
+				go a.reselectExitNode()
+			}
+		}
+		a.changed()
+	})
 	return a, nil
 }
 
@@ -333,6 +351,32 @@ func (a *App) apply(s config.Settings) error {
 	}
 	a.changed()
 	return nil
+}
+
+func (a *App) reselectExitNode() {
+	a.mu.Lock()
+	running, exit := a.state == Routing, a.settings.ExitNode
+	a.mu.Unlock()
+	if !running {
+		return
+	}
+	if err := a.node.SetExitNode(a.ctx, exit); err != nil {
+		a.Logf("reselect exit node after sign-in: %v", err)
+	}
+}
+
+// ExitNodes lists the exit nodes this device may use.
+func (a *App) ExitNodes() ([]tailnet.ExitNode, error) {
+	ctx, cancel := context.WithTimeout(a.ctx, 5*time.Second)
+	defer cancel()
+	return a.node.ExitNodes(ctx)
+}
+
+// WaitSignedIn waits until the node is signed in and connected.
+func (a *App) WaitSignedIn(d time.Duration) error {
+	ctx, cancel := context.WithTimeout(a.ctx, d)
+	defer cancel()
+	return a.node.WaitRunning(ctx)
 }
 
 func (a *App) Logout() error {

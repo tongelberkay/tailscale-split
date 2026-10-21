@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/netip"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -28,6 +29,19 @@ type Status struct {
 	Self     string // our MagicDNS name or IP
 	ExitNode string // the selected exit node's name, empty if none active
 	ExitOK   bool   // exit node selected and online
+	// KeyExpiry is when this device's sign-in expires; zero if it never
+	// does (key expiry disabled in the admin console). Once it passes, the
+	// state goes back to NeedsLogin and a new sign-in link is fetched.
+	KeyExpiry time.Time
+}
+
+// ExitNode is a peer this device may use as an exit node.
+type ExitNode struct {
+	Name   string // MagicDNS name's first label, as typed in settings
+	DNS    string
+	IP     string
+	Online bool
+	Active bool // currently selected
 }
 
 type Node struct {
@@ -171,6 +185,10 @@ func (n *Node) Refresh(ctx context.Context) {
 	n.update(func(s *Status) {
 		if st.Self != nil {
 			s.Self = strings.TrimSuffix(st.Self.DNSName, ".")
+			s.KeyExpiry = time.Time{}
+			if st.Self.KeyExpiry != nil {
+				s.KeyExpiry = *st.Self.KeyExpiry
+			}
 		}
 		s.ExitOK = false
 		for _, p := range st.Peer {
@@ -180,6 +198,40 @@ func (n *Node) Refresh(ctx context.Context) {
 			}
 		}
 	})
+}
+
+// ExitNodes lists the peers this device may use as an exit node, sorted by
+// name.
+func (n *Node) ExitNodes(ctx context.Context) ([]ExitNode, error) {
+	if n.lc == nil {
+		return nil, errors.New("tailnet not started")
+	}
+	st, err := n.lc.Status(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return ListExitNodes(st), nil
+}
+
+func ListExitNodes(st *ipnstate.Status) []ExitNode {
+	var out []ExitNode
+	for _, p := range st.Peer {
+		if !p.ExitNodeOption {
+			continue
+		}
+		dns := strings.TrimSuffix(p.DNSName, ".")
+		label, _, _ := strings.Cut(dns, ".")
+		if label == "" {
+			label = p.HostName
+		}
+		e := ExitNode{Name: label, DNS: dns, Online: p.Online, Active: p.ExitNode}
+		if len(p.TailscaleIPs) > 0 {
+			e.IP = p.TailscaleIPs[0].String()
+		}
+		out = append(out, e)
+	}
+	sort.Slice(out, func(i, j int) bool { return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name) })
+	return out
 }
 
 // FindExitNode matches want against peers' IPs, host names and MagicDNS names

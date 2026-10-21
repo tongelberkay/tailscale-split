@@ -13,6 +13,7 @@ import (
 	"tailsplit/internal/app"
 	"tailsplit/internal/config"
 	"tailsplit/internal/proc"
+	"tailsplit/internal/tailnet"
 )
 
 var (
@@ -22,7 +23,10 @@ var (
 	iconBroken  = Icon(0xe0, 0x4f, 0x4f)                   // red: routing but exit node offline
 )
 
-const maxAppItems = 24
+const (
+	maxAppItems  = 24
+	maxExitNodes = 16
+)
 
 // appItem is one app in the menu, with its own actions.
 type appItem struct {
@@ -34,6 +38,9 @@ type tray struct {
 	logPath string
 
 	status, signIn, toggle, exitNode *systray.MenuItem
+	expiry                           *systray.MenuItem
+	nodeItems                        []*systray.MenuItem
+	noNodes                          *systray.MenuItem
 	apps                             *systray.MenuItem
 	appItems                         []appItem
 	addRunning, addApp               *systray.MenuItem
@@ -42,6 +49,7 @@ type tray struct {
 
 	mu      sync.Mutex
 	lastURL string
+	nodes   []tailnet.ExitNode // what nodeItems show, refreshed every few seconds
 }
 
 // Run shows the tray icon and blocks until Quit.
@@ -57,8 +65,17 @@ func (t *tray) ready() {
 
 	t.status = systray.AddMenuItem("Starting...", "")
 	t.status.Disable()
-	t.exitNode = systray.AddMenuItem("", "")
-	t.exitNode.Disable()
+	t.exitNode = systray.AddMenuItem("", "Exit nodes this device may use")
+	for range maxExitNodes {
+		it := t.exitNode.AddSubMenuItemCheckbox("", "Send the listed apps through this exit node", false)
+		it.Hide()
+		t.nodeItems = append(t.nodeItems, it)
+	}
+	t.noNodes = t.exitNode.AddSubMenuItem("No exit nodes available yet", "")
+	t.noNodes.Disable()
+	t.expiry = systray.AddMenuItem("", "")
+	t.expiry.Disable()
+	t.expiry.Hide()
 	t.signIn = systray.AddMenuItem("Sign in to Tailscale...", "Open the sign-in page in your browser")
 	t.signIn.Hide()
 	systray.AddSeparator()
@@ -87,13 +104,30 @@ func (t *tray) ready() {
 	go t.loop()
 	go t.watchSettings()
 	go func() {
-		for range time.Tick(3 * time.Second) {
+		for {
+			t.refreshNodes()
 			t.render() // refresh flow counters
+			time.Sleep(3 * time.Second)
 		}
 	}()
 }
 
 func (t *tray) loop() {
+	for i, it := range t.nodeItems {
+		go func() {
+			for range it.ClickedCh {
+				t.mu.Lock()
+				var name string
+				if i < len(t.nodes) {
+					name = t.nodes[i].Name
+				}
+				t.mu.Unlock()
+				if name != "" {
+					go t.chooseExitNode(name)
+				}
+			}
+		}()
+	}
 	for i, it := range t.appItems {
 		go func() {
 			for {
@@ -187,6 +221,29 @@ func (t *tray) launch(i int) {
 	}
 }
 
+// refreshNodes re-reads the exit nodes the tailnet offers this device.
+func (t *tray) refreshNodes() {
+	nodes, err := t.a.ExitNodes()
+	if err != nil {
+		return // not signed in yet; keep the last list
+	}
+	t.mu.Lock()
+	t.nodes = nodes
+	t.mu.Unlock()
+}
+
+func (t *tray) chooseExitNode(name string) {
+	err := t.a.UpdateSettings(func(s *config.Settings) error {
+		s.ExitNode = name
+		return nil
+	})
+	if err != nil {
+		Error("TailSplit could not switch exit node", err.Error())
+	}
+	t.refreshNodes()
+	t.render()
+}
+
 func (t *tray) removeApp(i int) {
 	t.a.UpdateSettings(func(s *config.Settings) error {
 		if i < len(s.Apps) {
@@ -268,9 +325,44 @@ func (t *tray) render() {
 		exit = ts.ExitNode
 	}
 	if exit == "" {
-		t.exitNode.SetTitle("Exit node: not set (Edit settings)")
+		t.exitNode.SetTitle("Exit node: choose one")
 	} else {
 		t.exitNode.SetTitle("Exit node: " + exit)
+	}
+	t.mu.Lock()
+	nodes := t.nodes
+	t.mu.Unlock()
+	want := strings.ToLower(s.Settings.ExitNode)
+	for i, it := range t.nodeItems {
+		if i >= len(nodes) {
+			it.Hide()
+			continue
+		}
+		n := nodes[i]
+		title := n.Name + "   " + n.IP
+		if !n.Online {
+			title += "   (offline)"
+		}
+		it.SetTitle(title)
+		if strings.ToLower(n.Name) == want || strings.ToLower(n.DNS) == want || n.IP == want {
+			it.Check()
+		} else {
+			it.Uncheck()
+		}
+		it.Show()
+	}
+	if len(nodes) == 0 {
+		t.noNodes.Show()
+	} else {
+		t.noNodes.Hide()
+	}
+	if exp := ts.KeyExpiry; !exp.IsZero() && ts.State == "Running" {
+		days := int(time.Until(exp).Hours() / 24)
+		t.expiry.SetTitle(fmt.Sprintf("Sign-in expires %s (in %d days)", exp.Local().Format("2 Jan 2006"), days))
+		t.expiry.SetTooltip("You'll be asked to sign in again then. To avoid that, disable key expiry for this device in the Tailscale admin console.")
+		t.expiry.Show()
+	} else {
+		t.expiry.Hide()
 	}
 	if s.State == app.Stopped {
 		t.toggle.SetTitle("Start routing")

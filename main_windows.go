@@ -20,6 +20,7 @@ import (
 	"tailsplit/internal/logfile"
 	"tailsplit/internal/oneshot"
 	"tailsplit/internal/proc"
+	"tailsplit/internal/tailnet"
 	"tailsplit/internal/ui"
 )
 
@@ -36,6 +37,7 @@ Usage:
   tailsplit mode proxy|tun     proxy (default): only listed apps launched through
                                TailSplit use the exit node; tun: virtual adapter
                                for all traffic (needs administrator rights)
+  tailsplit exit-nodes         list the exit nodes you can use (signs in if needed)
   tailsplit exit-node <name>   set the exit node (Tailscale IP, host or MagicDNS name)
   tailsplit add <app.exe>...   send these executables through the exit node
   tailsplit remove <app.exe>   stop sending an executable through the exit node
@@ -94,6 +96,8 @@ func run(args []string) error {
 		return tray(dir)
 	case "run":
 		return console(dir)
+	case "exit-nodes":
+		return listExitNodes(dir)
 	case "exit-node":
 		if len(args) != 1 {
 			return fmt.Errorf("usage: tailsplit exit-node <tailscale-ip-or-name>")
@@ -350,6 +354,64 @@ func runApp(dir string, args oneshot.Args) error {
 		time.Sleep(2 * time.Second)
 	}
 	fmt.Fprintf(os.Stderr, "%s exited; stopping.\n", filepath.Base(exe))
+	return nil
+}
+
+// listExitNodes starts the node just long enough to read the exit nodes it
+// may use. It can't run alongside the tray app, which shows them itself.
+func listExitNodes(dir string) error {
+	if ok, release := ui.SingleInstance(); !ok {
+		return fmt.Errorf("the TailSplit tray app is running; its Exit node menu lists them")
+	} else {
+		release()
+	}
+	a, _, done, err := prepare(dir, true, true)
+	if err != nil {
+		return err
+	}
+	defer done()
+	defer a.Close()
+	var shown sync.Map
+	a.OnChange = func() {
+		if u := a.Snapshot().Tailnet.AuthURL; u != "" {
+			if _, seen := shown.LoadOrStore(u, true); !seen {
+				fmt.Fprintln(os.Stderr, "Sign in to Tailscale in your browser:", u)
+				ui.Open(u)
+			}
+		}
+	}
+	a.OnChange()
+	if err := a.WaitSignedIn(3 * time.Minute); err != nil {
+		return fmt.Errorf("not signed in: %w", err)
+	}
+	// The peer list arrives just after the node comes up.
+	var nodes []tailnet.ExitNode
+	for i := 0; i < 10 && len(nodes) == 0; i++ {
+		if nodes, err = a.ExitNodes(); err != nil {
+			return err
+		}
+		if len(nodes) == 0 {
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+	if len(nodes) == 0 {
+		fmt.Println("No exit nodes are available to this device. A device must advertise itself as an exit node, be approved in the admin console, and be allowed by your access rules.")
+		return nil
+	}
+	saved := strings.ToLower(a.Snapshot().Settings.ExitNode)
+	for _, n := range nodes {
+		mark, state := " ", "online"
+		if saved != "" && (strings.ToLower(n.Name) == saved || strings.ToLower(n.DNS) == saved || n.IP == saved) {
+			mark = "*"
+		}
+		if !n.Online {
+			state = "offline"
+		}
+		fmt.Printf("%s %-24s %-16s %s\n", mark, n.Name, n.IP, state)
+	}
+	if exp := a.Snapshot().Tailnet.KeyExpiry; !exp.IsZero() {
+		fmt.Printf("\nThis device's sign-in expires %s.\n", exp.Local().Format("2 Jan 2006 15:04"))
+	}
 	return nil
 }
 
