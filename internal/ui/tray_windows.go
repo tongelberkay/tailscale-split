@@ -372,9 +372,11 @@ func (t *tray) render() {
 	systray.SetTooltip("TailSplit: " + s.State.String())
 
 	proxyMode := s.Settings.Mode == config.ModeProxy
+	labels := Labels(s.Settings.Apps)
 	for i, it := range t.appItems {
 		if i < len(s.Settings.Apps) {
-			it.top.SetTitle(filepath.Base(s.Settings.Apps[i]) + "   " + s.Settings.Apps[i])
+			it.top.SetTitle(labels[i])
+			it.top.SetTooltip(s.Settings.Apps[i])
 			it.top.Show()
 			if proxyMode {
 				it.launch.Show()
