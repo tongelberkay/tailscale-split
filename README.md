@@ -3,6 +3,10 @@
 Send only the apps you choose through a Tailscale exit node. Everything
 else stays on your normal internet connection.
 
+> **Status: v0.1, early.** Proxy mode and the one-shot command have been
+> tried on one Windows 11 PC. TUN mode has only been tested in unit tests.
+> TailSplit is not affiliated with Tailscale Inc.
+
 This is a Go rewrite of the earlier Python and sing-box prototype. It
 ships as one `tailsplit.exe` (about 20 MB). TUN mode also needs the signed
 `wintun.dll` (about 0.4 MB), which proxy mode doesn't. The old build needed `sing-box.exe` (82 MB) and
@@ -134,7 +138,7 @@ app ──► Windows routing ──► TailSplit adapter (0.0.0.0/1 + 128.0.0.0
 | `internal/app` | start/stop orchestration |
 | `internal/ui` | tray, file picker, running-app picker, launcher, elevation, icon |
 
-Licences: Tailscale is BSD-3-Clause, wireguard-go is MIT, and gVisor and
+TailSplit itself is MIT-licensed (see `LICENSE`). Tailscale is BSD-3-Clause, wireguard-go is MIT, and gVisor and
 fyne systray are Apache-2.0, so there are no GPL obligations, unlike sing-box.
 `wintun.dll` comes under the Wintun prebuilt-binaries licence. Read it in
 the downloaded zip before redistributing.

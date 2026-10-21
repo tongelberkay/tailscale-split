@@ -21,7 +21,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Tests failed.' }
 
 New-Item -ItemType Directory -Force -Path dist | Out-Null
 $env:CGO_ENABLED = '0'
-go build -trimpath -tags $tags -ldflags '-s -w -H windowsgui' -o dist\tailsplit.exe .
+$version = if ($env:TAILSPLIT_VERSION) { $env:TAILSPLIT_VERSION } else { 'dev' }
+go build -trimpath -tags $tags -ldflags "-s -w -H windowsgui -X main.version=$version" -o dist\tailsplit.exe .
 if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
 
 # Only TUN mode needs wintun.dll; proxy mode (the default) runs without it.

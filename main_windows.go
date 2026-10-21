@@ -38,9 +38,13 @@ Usage:
   tailsplit remove <app.exe>   stop sending an executable through the exit node
   tailsplit list               show settings
   tailsplit dir                print the data folder (treat it as a password)
+  tailsplit version            print the version
 
 Settings live in %LOCALAPPDATA%\TailSplit\settings.json.
 `
+
+// version is set at build time with -ldflags "-X main.version=...".
+var version = "dev"
 
 func main() {
 	if len(os.Args) > 1 {
@@ -59,6 +63,16 @@ func run(args []string) error {
 	dir, err := config.Dir()
 	if err != nil {
 		return err
+	}
+	if len(args) > 0 {
+		switch strings.ToLower(args[0]) {
+		case "version", "-v", "--version":
+			fmt.Println("tailsplit", version)
+			return nil
+		case "-h", "--help", "/?":
+			fmt.Print(usage)
+			return nil
+		}
 	}
 	if len(args) > 0 && (oneshot.LooksLikeApp(args[0]) || strings.HasPrefix(args[0], "-")) {
 		a, err := oneshot.Parse(args)
