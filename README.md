@@ -98,9 +98,10 @@ picked up within about 2 seconds.
   not the exit node's.
 * There is no kill switch when routing is **stopped**: apps then use the
   normal network.
-* An app is matched by its exact `.exe` path, or by its parent's or
-  grandparent's path (up to 4 levels), so helpers it starts, such as
-  `msedgewebview2.exe` under Teams, follow it. Store app updates can change paths.
+* An app is matched by its exact `.exe` path, or by any ancestor's path
+  (up to 8 levels), so helpers it starts, such as `msedgewebview2.exe`
+  under Teams or `git` run from an app's terminal, follow it. Store apps
+  are matched by package, so they keep working after Store updates.
 * The tray lists the first 24 apps. `settings.json` can hold more.
 * Uploads of Tailscale client logs to Tailscale are turned off. Local logs go
   to `tailsplit.log`, with sign-in links and keys redacted.

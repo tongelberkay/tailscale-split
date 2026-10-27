@@ -34,7 +34,9 @@ func Lookup(f Flow) []string {
 	return chain(pid)
 }
 
-const maxDepth = 4
+// Tools run from an app's terminal sit deep below it, e.g. git-remote-https
+// → git → pwsh → cmd → Claude Code → Claude is six levels.
+const maxDepth = 8
 
 func pidFor(f Flow) (uint32, bool) {
 	v6 := f.Local.Addr().Is6()
