@@ -1,8 +1,6 @@
 // Package policy decides which processes may use the exit node proxy.
 package policy
 
-import "strings"
-
 // Policy is immutable; build a new one when the app list changes.
 type Policy struct {
 	apps map[string]bool // lower-cased executable paths
@@ -11,7 +9,7 @@ type Policy struct {
 func New(apps []string) *Policy {
 	p := &Policy{apps: make(map[string]bool, len(apps))}
 	for _, a := range apps {
-		p.apps[strings.ToLower(a)] = true
+		p.apps[key(a)] = true
 	}
 	return p
 }
@@ -21,7 +19,7 @@ func New(apps []string) *Policy {
 // an unidentified owner (nil) is not selected.
 func (p *Policy) Selected(owner []string) bool {
 	for _, path := range owner {
-		if p.apps[strings.ToLower(path)] {
+		if p.apps[key(path)] {
 			return true
 		}
 	}

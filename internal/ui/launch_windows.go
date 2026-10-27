@@ -13,6 +13,8 @@ import (
 // apps ignore them on Windows and need --proxy-server instead. Child
 // processes inherit both.
 func Launch(exe, proxyURL string, extra ...string) error {
+	exe = currentPackagePath(exe)
+	packaged := strings.Contains(strings.ToLower(exe), `\windowsapps\`)
 	var args []string
 	if isChromium(exe) {
 		args = append(args, "--proxy-server="+proxyURL)
@@ -24,7 +26,10 @@ func Launch(exe, proxyURL string, extra ...string) error {
 	start := func(path string) error {
 		cmd := exec.Command(path, args...)
 		cmd.Env = env
-		cmd.Dir = filepath.Dir(exe)
+		// A Store app's package folder can't be used as a working directory.
+		if !packaged {
+			cmd.Dir = filepath.Dir(exe)
+		}
 		if err := cmd.Start(); err != nil {
 			return err
 		}
@@ -37,7 +42,7 @@ func Launch(exe, proxyURL string, extra ...string) error {
 	// Store apps under WindowsApps cannot be started by their real path, but
 	// many register an execution alias that can, and that keeps our
 	// environment and arguments.
-	if strings.Contains(strings.ToLower(exe), `\windowsapps\`) {
+	if packaged {
 		alias := filepath.Join(os.Getenv("LOCALAPPDATA"), "Microsoft", "WindowsApps", filepath.Base(exe))
 		if _, serr := os.Stat(alias); serr == nil {
 			if aerr := start(alias); aerr == nil {
